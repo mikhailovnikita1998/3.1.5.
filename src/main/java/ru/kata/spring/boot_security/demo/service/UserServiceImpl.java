@@ -1,92 +1,106 @@
 package ru.kata.spring.boot_security.demo.service;
 
-
-
-import org.springframework.context.annotation.Lazy;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.core.userdetails.UserDetails;
-import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
-import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-import ru.kata.spring.boot_security.demo.dao.RoleDao;
-import ru.kata.spring.boot_security.demo.dao.UserDao;
 import ru.kata.spring.boot_security.demo.model.Role;
 import ru.kata.spring.boot_security.demo.model.User;
+import ru.kata.spring.boot_security.demo.repositories.UserRepository;
 
+import javax.transaction.Transactional;
+import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
-public class UserServiceImpl implements UserService, UserDetailsService {
+public class UserServiceImpl implements UserService {
 
-    private final UserDao userDao;
-    private final RoleDao roleDao;
-    final PasswordEncoder bCryptPasswordEncoder;
+    private final UserRepository userRepository;
+    private final RoleSerivce roleSerivce;
+    private final BCryptPasswordEncoder bCryptPasswordEncoder;
 
-    public UserServiceImpl(UserDao userDao, RoleDao roleDao, @Lazy PasswordEncoder bCryptPasswordEncoder) {
-        this.userDao = userDao;
-        this.roleDao = roleDao;
+
+    @Autowired
+    public UserServiceImpl(UserRepository userRepository, RoleSerivce roleSerivce, BCryptPasswordEncoder bCryptPasswordEncoder) {
+        this.userRepository = userRepository;
+        this.roleSerivce = roleSerivce;
         this.bCryptPasswordEncoder = bCryptPasswordEncoder;
+
     }
-    @Transactional(readOnly = true)
     @Override
-    public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
-        User user = userDao.getUserByUsername(username);
-        if(user == null){
-            throw new UsernameNotFoundException(String.format("User '%s' not found", username));
+    public UserDetails loadUserByUsername(String email) throws UsernameNotFoundException {
+        Optional<User> user = userRepository.findUserByEmail(email);
+
+        if (user.isEmpty()) {
+            throw new UsernameNotFoundException("User not found");
         }
-        return user;
+        return user.get();
     }
-@Transactional
-    @Override
-    public void add(User user) {
+
+    @Transactional
+    public boolean saveUser(User user) {
+
+        if (user.getRoles().isEmpty()) {
+            user.setRoles(Collections.singleton(new Role(1, "ROLE_USER")));
+        }
+        user.setRoles(user.getRoles().stream()
+                .map(role -> roleSerivce.getByName(role.getRoleName()))
+                .collect(Collectors.toSet()));
+
         user.setPassword(bCryptPasswordEncoder.encode(user.getPassword()));
-        user.setRoles(roleDao.getRolesByName(user.getRoles()));
-        userDao.add(user);
+        userRepository.save(user);
+        return true;
     }
 
-    @Override
-    @Transactional(readOnly = true)
-    public User findById(Integer id) {
-        return userDao.findById(id);
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public List<User> findAll() {
-        return userDao.findAll();
-    }
-
-    @Override
     @Transactional
-    public void update(User user) {
-
-        user.setRoles(roleDao.getRolesByName(user.getRoles()));
-        userDao.update(user);
-
+    public boolean saveUser(User user, Set<Role> roles) {
+        user.setRoles(roles);
+        user.setPassword(bCryptPasswordEncoder.encode(user.getPassword()));
+        userRepository.save(user);
+        return true;
     }
 
-    @Override
     @Transactional
-    public void delete(int id) {
-        userDao.delete(id);
+    public List<User> getListAllUsers() {
+        return userRepository.findAll();
     }
 
-    @Override
+    @Transactional()
+    public User findUserById(int id) {
+        Optional<User> user = userRepository.findById(id);
+        return user.orElse(new User());
+    }
     @Transactional
-    public User createUser() {
-        User user = new User();
-        Role roleUser = roleDao.getRoleByName("ROLE_USER");
-        user.addRole(roleUser);
-        return user;
+    public void updateUser(User user) {
+
+        User userFromDB = userRepository.findUserById(user.getId());
+         // добавил проверку на то: если никакие роли не были выбраны при изменении пользователя,
+        // то тогда должны остаться роли, которые у него уже были, а то с пустыми ролями получались
+        // пользователи
+        if (user.getRoles().isEmpty()) {
+            user.setRoles(userFromDB.getRoles());
+        } else {
+            user.setRoles(user.getRoles().stream()
+                    .map(role -> roleSerivce.getByName(role.getRoleName()))
+                    .collect(Collectors.toSet()));
+        }
+
+        //проверка пароля
+        if (!user.getPassword().equals(userFromDB.getPassword())) {
+            user.setPassword(bCryptPasswordEncoder.encode(user.getPassword()));
+        }
+
+        userRepository.save(user);
     }
 
-    @Override
-    @Transactional(readOnly = true)
-    public User getUserByUsername(String username) {
-        return userDao.getUserByUsername(username);
+    @Transactional
+    public void deleteUser(int id) {
+        userRepository.deleteById(id);
     }
-
-
-
 }
+
+
